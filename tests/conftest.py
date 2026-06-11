@@ -1,36 +1,34 @@
-"""Session-scoped fixture with intentional bugs."""
-
-import os
+"""Per-test isolated fixtures."""
 
 import pytest
 
-from src.config import get_config
 from src.db import init_db
 
 
-@pytest.fixture(scope="session")
-def db_session():
-    # BUG: shared session DB
-    # A single :memory: SQLite connection is created once and shared across
-    # ALL tests in ALL test files. Tests that mutate the DB (insert/update)
-    # permanently change the global state for subsequent tests.
-    init_db()
+@pytest.fixture(autouse=True)
+def db_session(monkeypatch):
+    """Give every test a fresh in-memory database and clean environment."""
+    # --- env isolation ---------------------------------------------------
+    # Remove APP_MODE so tests start from a clean slate; monkeypatch
+    # automatically restores the original value after each test.
+    monkeypatch.delenv("APP_MODE", raising=False)
 
-    # BUG: environ not restored
-    # os.environ is modified without using monkeypatch, so the change
-    # leaks across the entire test session and is never reverted.
-    os.environ["APP_MODE"] = "development"
+    # --- DB isolation ----------------------------------------------------
+    # Close any leftover connection from a previous test, then re-init.
+    import src.db as db_module
+
+    if db_module._connection is not None:
+        db_module._connection.close()
+        db_module._connection = None
+
+    init_db()
 
     yield
 
-    # Missing cleanup:
-    #   1. No del os.environ["APP_MODE"] or restore of old value.
-    #   2. No teardown / table DROP on the shared in-memory DB.
-    #      Once yielded, the connection stays alive and all accumulated data
-    #      from every test remains available to any later test.
-
-    # Sanity check: config reads the leaked env var (proving no cleanup)
-    cfg = get_config()
-    assert cfg["APP_MODE"] == "development", (
-        "environ was supposed to be cleaned up but it's still set"
-    )
+    # Teardown: drop tables and close so nothing leaks to the next test.
+    conn = db_module._connection
+    if conn is not None:
+        conn.execute("DROP TABLE IF EXISTS orders")
+        conn.execute("DROP TABLE IF EXISTS users")
+        conn.close()
+        db_module._connection = None
