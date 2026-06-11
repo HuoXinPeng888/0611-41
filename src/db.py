@@ -45,3 +45,11 @@ def add_order(user_id: int, amount: float) -> None:
 def get_orders() -> list[tuple]:
     conn = _get_connection()
     return conn.execute("SELECT * FROM orders").fetchall()
+
+
+def reset_db() -> None:
+    """Delete all data from tables, keeping the schema intact."""
+    conn = _get_connection()
+    conn.execute("DELETE FROM orders")
+    conn.execute("DELETE FROM users")
+    conn.commit()
